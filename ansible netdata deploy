@@ -1,0 +1,90 @@
+Here’s a simple and effective **Ansible playbook to deploy Netdata** on Linux hosts (e.g., Ubuntu, CentOS).
+
+---
+
+### 📁 File: `install_netdata.yml`
+
+```yaml
+---
+- name: Install and configure Netdata
+  hosts: netdata_nodes
+  become: yes
+
+  tasks:
+
+    - name: Ensure dependencies are installed
+      apt:
+        name:
+          - curl
+          - git
+          - zlib1g-dev
+          - uuid-dev
+          - libmnl-dev
+          - gcc
+          - make
+          - autoconf
+          - autogen
+          - pkg-config
+          - python3
+          - python3-mysqldb
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Ensure dependencies are installed (RHEL/CentOS)
+      yum:
+        name:
+          - curl
+          - git
+          - zlib-devel
+          - libuuid-devel
+          - libmnl-devel
+          - gcc
+          - make
+          - autoconf
+          - autogen
+          - pkgconfig
+          - python3
+          - python3-PyMySQL
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Install Netdata using official kickstart script
+      shell: bash <(curl -Ss https://my-netdata.io/kickstart.sh) --non-interactive
+      args:
+        executable: /bin/bash
+
+    - name: Ensure Netdata is started and enabled
+      systemd:
+        name: netdata
+        enabled: yes
+        state: started
+```
+
+---
+
+### 📁 File: `inventory.ini`
+
+```ini
+[netdata_nodes]
+192.168.1.100 ansible_user=ubuntu
+192.168.1.101 ansible_user=ubuntu
+```
+
+---
+
+### ✅ To Run
+
+```bash
+ansible-playbook -i inventory.ini install_netdata.yml
+```
+
+---
+
+### 🛠 Notes
+
+- Supports both **Debian-based** and **RHEL-based** distros.
+- Uses the **official Netdata kickstart script** (safe and fast).
+- Adjust users, firewall, or SSH options as needed.
+- You can add roles or monitoring plugins later for custom metrics.
+
+Need a role-based version or want to deploy it with Docker? Just say the word.

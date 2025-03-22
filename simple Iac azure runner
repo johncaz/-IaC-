@@ -1,0 +1,176 @@
+Here’s a **Terraform setup to deploy GitLab Runners on Azure** using a Linux VM and install the runner via `cloud-init`.
+
+---
+
+### 🧱 Assumptions
+
+- Deploying on **Azure VM (Ubuntu)**
+- Registering runner using a **GitLab registration token**
+- Using **Docker executor**
+- Runner connects to GitLab.com (can be changed)
+
+---
+
+### 📁 `main.tf`
+
+```hcl
+provider "azurerm" {
+  features {}
+}
+
+resource "azurerm_resource_group" "rg" {
+  name     = "gitlab-runner-rg"
+  location = "East US"
+}
+
+resource "azurerm_virtual_network" "vnet" {
+  name                = "gitlab-runner-vnet"
+  address_space       = ["10.0.0.0/16"]
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+}
+
+resource "azurerm_subnet" "subnet" {
+  name                 = "gitlab-runner-subnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.0.1.0/24"]
+}
+
+resource "azurerm_network_interface" "nic" {
+  name                = "gitlab-runner-nic"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.subnet.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.gitlab_runner_public_ip.id
+  }
+}
+
+resource "azurerm_public_ip" "gitlab_runner_public_ip" {
+  name                = "gitlab-runner-ip"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  allocation_method   = "Dynamic"
+}
+
+resource "azurerm_network_security_group" "nsg" {
+  name                = "gitlab-runner-nsg"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  security_rule {
+    name                       = "SSH"
+    priority                   = 1001
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_network_interface_security_group_association" "nsg_assoc" {
+  network_interface_id      = azurerm_network_interface.nic.id
+  network_security_group_id = azurerm_network_security_group.nsg.id
+}
+
+resource "azurerm_linux_virtual_machine" "runner" {
+  name                = "gitlab-runner-vm"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  size                = "Standard_B1s"
+  admin_username      = "azureuser"
+  network_interface_ids = [
+    azurerm_network_interface.nic.id,
+  ]
+
+  admin_ssh_key {
+    username   = "azureuser"
+    public_key = file("~/.ssh/id_rsa.pub")
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "UbuntuServer"
+    sku       = "20_04-lts"
+    version   = "latest"
+  }
+
+  custom_data = base64encode(<<-EOF
+              #!/bin/bash
+              apt-get update
+              apt-get install -y docker.io curl
+              systemctl start docker
+              systemctl enable docker
+
+              curl -L --output /usr/local/bin/gitlab-runner https://gitlab-runner-downloads.s3.amazonaws.com/latest/binaries/gitlab-runner-linux-amd64
+              chmod +x /usr/local/bin/gitlab-runner
+              useradd --comment 'GitLab Runner' --create-home gitlab-runner --shell /bin/bash
+              gitlab-runner install --user=gitlab-runner --working-directory=/home/gitlab-runner
+              gitlab-runner start
+
+              gitlab-runner register --non-interactive \
+                --url "https://gitlab.com/" \
+                --registration-token "${var.gitlab_runner_token}" \
+                --executor "docker" \
+                --docker-image "alpine:latest" \
+                --description "azure-gitlab-runner" \
+                --tag-list "azure,terraform" \
+                --run-untagged="true" \
+                --locked="false"
+              EOF)
+}
+
+```
+
+---
+
+### 📁 `variables.tf`
+
+```hcl
+variable "gitlab_runner_token" {
+  description = "GitLab Runner registration token"
+  type        = string
+}
+```
+
+---
+
+### 📁 `outputs.tf`
+
+```hcl
+output "runner_public_ip" {
+  value = azurerm_public_ip.gitlab_runner_public_ip.ip_address
+}
+```
+
+---
+
+### ✅ To Deploy
+
+```bash
+terraform init
+terraform apply -var="gitlab_runner_token=YOUR_TOKEN_HERE"
+```
+
+---
+
+### 🛠 Notes
+
+- VM Size: `Standard_B1s` is budget-friendly; scale as needed.
+- Add proper tags, auto-shutdown, and monitoring for production.
+- For production, consider storing secrets in **Azure Key Vault**.
+- If you want to scale runners or use a VMSS (Scale Set), let me know—can help build that too.
+
+Want to use **Docker-in-Docker**, **Kubernetes**, or **Azure Container Instances (ACI)** for runners instead?
